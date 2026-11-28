@@ -23,6 +23,17 @@ def _cannot_import_name() -> ImportError:
     )
 
 
+@pytest.fixture
+def source_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate a source installation independently of the imported package."""
+    requirements = tmp_path / "requirements"
+    requirements.mkdir()
+    (requirements / "proto.txt").touch()
+    source = tmp_path / "lmcache" / "cli" / "commands" / "base.py"
+    monkeypatch.setattr(base, "__file__", str(source))
+
+
+@pytest.mark.usefixtures("source_checkout")
 @pytest.mark.parametrize(
     "error",
     [
@@ -40,6 +51,7 @@ def test_missing_binding_imports_get_the_generator(error: ImportError) -> None:
     assert "_generate.py" in hint
 
 
+@pytest.mark.usefixtures("source_checkout")
 @pytest.mark.parametrize(
     "error",
     [
