@@ -628,3 +628,55 @@ def test_baseline_visibility_timeout_log_does_not_claim_store_is_visible(
     assert not any(
         "until the cold STORE was visible" in message for message in messages
     )
+
+
+def test_baseline_visibility_retry_does_not_start_a_lookup_after_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    monkeypatch.setattr(
+        baseline_module, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=sleep)
+    )
+    # One sleep crosses the deadline, so no retry LOOKUP may start after it.
+    monkeypatch.setattr(baseline_module, "_VISIBILITY_RETRY_BUDGET_S", 0.05)
+    monkeypatch.setattr(baseline_module, "_VISIBILITY_RETRY_INTERVAL_S", 0.1)
+    client = _client("same", "same")
+    client.lookup.side_effect = [LookupResult(0, 1, 1.0)] * 10
+    client.retrieve.side_effect = [None, None]
+    client.store.side_effect = [_transfer("store"), _transfer("store")]
+
+    result = BaselineBenchCase(sequence_count=1, interval_seconds=0, num_tokens=1).run(
+        client, lambda _message: None
+    )
+
+    assert client.lookup.call_count == 2  # the cold and the warm LOOKUP only
+    assert result.checks["warm_full_hit"] == [False]
+
+
+def test_baseline_visibility_retry_error_does_not_claim_store_is_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(baseline_module, "_VISIBILITY_RETRY_INTERVAL_S", 0.0)
+    client = _client("same", "same")
+    client.lookup.side_effect = [
+        LookupResult(0, 1, 1.0),
+        LookupResult(0, 1, 1.0),
+        LookupResult(0, 1, 1.0, error="LOOKUP timed out"),
+    ]
+    client.retrieve.side_effect = [None, None]
+    client.store.side_effect = [_transfer("store"), _transfer("store")]
+    messages: list[str] = []
+
+    result = BaselineBenchCase(sequence_count=1, interval_seconds=0, num_tokens=1).run(
+        client, messages.append
+    )
+
+    assert result.checks["warm_lookup_succeeded"] == [False]
+    assert not any(
+        "until the cold STORE was visible" in message for message in messages
+    )
+    assert any("LOOKUP timed out" in message for message in messages)

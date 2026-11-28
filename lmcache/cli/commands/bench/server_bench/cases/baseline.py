@@ -335,10 +335,18 @@ class BaselineBenchCase:
         retries = 0
         while lookup.is_full_miss and time.monotonic() < deadline:
             time.sleep(_VISIBILITY_RETRY_INTERVAL_S)
+            # The sleep may cross the deadline; do not start a LOOKUP after it.
+            if time.monotonic() >= deadline:
+                break
             lookup = client.lookup(request)
             retries += 1
         if retries and log is not None:
-            if lookup.is_full_miss:
+            if not lookup.succeeded:
+                log(
+                    "  [seq %d/warm] LOOKUP retried %d time(s); the last retry "
+                    "failed: %s" % (request.sequence_id, retries, lookup.error)
+                )
+            elif lookup.is_full_miss:
                 log(
                     "  [seq %d/warm] LOOKUP retried %d time(s); cold STORE "
                     "still not visible after retry budget"
